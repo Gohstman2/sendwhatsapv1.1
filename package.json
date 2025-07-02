@@ -2,10 +2,10 @@
   "name": "whatsapp-supabase-server",
   "version": "1.0.0",
   "description": "Serveur WhatsApp avec session sauvegardée sur Supabase Storage",
-  "main": "index.js",
+  "main": "server.js",
   "type": "commonjs",
   "scripts": {
-    "start": "node index.js"
+    "start": "node server.js"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.28.0",
