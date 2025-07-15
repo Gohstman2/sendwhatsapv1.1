@@ -12,60 +12,37 @@ const port = 3000;
 app.use(cors());
 app.use(express.json());
 
-const GITHUB_TOKEN = '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'; // Mets ton token ici (idéalement variable d'env)
-const GIST_ID = '1b1826e87cc3fa6f70157ba06aa2caa6'; // Ton ID de Gist
 const SESSION_FILE = 'session.json';
 const sessionPath = path.resolve(__dirname, SESSION_FILE);
-
 let qrCodeBase64 = null;
 let authenticated = false;
 
-// Télécharger session depuis le Gist GitHub
+// Télécharger session depuis ton propre serveur
 async function downloadSession() {
   try {
-    const response = await axios.get(`https://api.github.com/gists/${GIST_ID}`, {
-      headers: {
-        Authorization: `Bearer ${GITHUB_TOKEN}`,
-        Accept: 'application/vnd.github+json'
-      }
-    });
+    const response = await axios.get('https://sendfiles.pythonanywhere.com/download');
+    const content = response.data;
 
-    const files = response.data.files;
-    if (!files[SESSION_FILE]) {
-      console.log('🟡 Pas de session dans le Gist');
-      return null;
-    }
-
-    const content = files[SESSION_FILE].content;
-    await fs.writeFile(sessionPath, content);
-    console.log('✅ Session téléchargée depuis Gist');
-    return JSON.parse(content);
+    await fs.writeFile(sessionPath, JSON.stringify(content));
+    console.log('✅ Session téléchargée depuis ton serveur');
+    return content;
   } catch (err) {
-    console.error('❌ Erreur downloadSession:', err.message);
+    console.warn('🟡 Aucune session existante ou erreur de téléchargement');
     return null;
   }
 }
 
-// Upload session vers le Gist GitHub
+// Uploader session vers ton propre serveur
 async function uploadSession(session) {
   try {
-    const content = JSON.stringify(session);
-    await fs.writeFile(sessionPath, content);
+    await fs.writeFile(sessionPath, JSON.stringify(session));
 
-    await axios.patch(`https://api.github.com/gists/${GIST_ID}`, {
-      files: {
-        [SESSION_FILE]: {
-          content: content
-        }
-      }
-    }, {
-      headers: {
-        Authorization: `Bearer ${GITHUB_TOKEN}`,
-        Accept: 'application/vnd.github+json'
-      }
+    await axios.post('https://sendfiles.pythonanywhere.com/upload', {
+      filename: SESSION_FILE,
+      content: session
     });
 
-    console.log('✅ Session sauvegardée sur Gist');
+    console.log('✅ Session sauvegardée sur ton serveur');
   } catch (err) {
     console.error('❌ Erreur uploadSession:', err.message);
   }
@@ -117,11 +94,7 @@ async function uploadSession(session) {
   });
 
   app.get('/checkAuth', (req, res) => {
-    if (authenticated) {
-      res.json({ status: 'authenticated' });
-    } else {
-      res.json({ status: 'not authenticated' });
-    }
+    return res.json({ status: authenticated ? 'authenticated' : 'not authenticated' });
   });
 
   app.post('/sendMessage', async (req, res) => {
