@@ -4,11 +4,7 @@ const QRCode = require('qrcode');
 const cors = require('cors');
 const fs = require('fs').promises;
 const path = require('path');
-const dotenv = require('dotenv');
-const { createClient } = require('@supabase/supabase-js');
-const fetch = require('node-fetch');
-
-dotenv.config();
+const axios = require('axios');
 
 const app = express();
 const port = 3000;
@@ -16,52 +12,60 @@ const port = 3000;
 app.use(cors());
 app.use(express.json());
 
-const SUPABASE_URL = process.env.SUPABASE_URL;
-const SUPABASE_KEY = process.env.SUPABASE_KEY;
-const SUPABASE_BUCKET = process.env.SUPABASE_BUCKET;
+const GITHUB_TOKEN = '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'; // Mets ton token ici (idéalement variable d'env)
+const GIST_ID = '1b1826e87cc3fa6f70157ba06aa2caa6'; // Ton ID de Gist
 const SESSION_FILE = 'session.json';
-
-const supabase = createClient(SUPABASE_URL, SUPABASE_KEY);
 const sessionPath = path.resolve(__dirname, SESSION_FILE);
 
 let qrCodeBase64 = null;
 let authenticated = false;
 
+// Télécharger session depuis le Gist GitHub
 async function downloadSession() {
   try {
-    const { data, error } = await supabase.storage
-      .from(SUPABASE_BUCKET)
-      .download(SESSION_FILE);
+    const response = await axios.get(`https://api.github.com/gists/${GIST_ID}`, {
+      headers: {
+        Authorization: `Bearer ${GITHUB_TOKEN}`,
+        Accept: 'application/vnd.github+json'
+      }
+    });
 
-    if (error) {
-      console.log('🟡 Pas de session sur Supabase');
+    const files = response.data.files;
+    if (!files[SESSION_FILE]) {
+      console.log('🟡 Pas de session dans le Gist');
       return null;
     }
 
-    const buffer = await data.arrayBuffer();
-    await fs.writeFile(sessionPath, Buffer.from(buffer));
-    console.log('✅ Session téléchargée depuis Supabase');
-    return JSON.parse(Buffer.from(buffer).toString());
+    const content = files[SESSION_FILE].content;
+    await fs.writeFile(sessionPath, content);
+    console.log('✅ Session téléchargée depuis Gist');
+    return JSON.parse(content);
   } catch (err) {
     console.error('❌ Erreur downloadSession:', err.message);
     return null;
   }
 }
 
+// Upload session vers le Gist GitHub
 async function uploadSession(session) {
   try {
-    await fs.writeFile(sessionPath, JSON.stringify(session));
-    const file = await fs.readFile(sessionPath);
+    const content = JSON.stringify(session);
+    await fs.writeFile(sessionPath, content);
 
-    const { error } = await supabase.storage
-      .from(SUPABASE_BUCKET)
-      .upload(SESSION_FILE, file, { upsert: true });
+    await axios.patch(`https://api.github.com/gists/${GIST_ID}`, {
+      files: {
+        [SESSION_FILE]: {
+          content: content
+        }
+      }
+    }, {
+      headers: {
+        Authorization: `Bearer ${GITHUB_TOKEN}`,
+        Accept: 'application/vnd.github+json'
+      }
+    });
 
-    if (error) {
-      console.error('❌ Erreur uploadSession:', error.message);
-    } else {
-      console.log('✅ Session sauvegardée sur Supabase');
-    }
+    console.log('✅ Session sauvegardée sur Gist');
   } catch (err) {
     console.error('❌ Erreur uploadSession:', err.message);
   }
