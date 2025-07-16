@@ -1,29 +1,15 @@
 {
-  "name": "whatsapp-gist-server",
+  "name": "whatsapp-auth-export",
   "version": "1.0.0",
-  "description": "Serveur WhatsApp avec session sauvegardée sur GitHub Gist",
-  "main": "server.js",
-  "type": "commonjs",
+  "description": "Serveur WhatsApp avec export de session.json",
+  "main": "index.js",
   "scripts": {
-    "start": "node server.js"
+    "start": "node index.js"
   },
   "dependencies": {
-    "axios": "^1.4.0",
-    "cors": "^2.8.5",
     "express": "^4.18.2",
+    "whatsapp-web.js": "^1.22.1",
     "qrcode": "^1.5.1",
-    "whatsapp-web.js": "^1.24.0"
-  },
-  "engines": {
-    "node": ">=16"
-  },
-  "keywords": [
-    "whatsapp",
-    "express",
-    "session",
-    "github",
-    "gist"
-  ],
-  "author": "",
-  "license": "ISC"
+    "cors": "^2.8.5"
+  }
 }
