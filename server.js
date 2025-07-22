@@ -1,116 +1,106 @@
-const express = require('express');
-const { Client, LegacySessionAuth } = require('whatsapp-web.js');
-const QRCode = require('qrcode');
-const cors = require('cors');
-const fs = require('fs');
-const path = require('path');
+const express = require("express");
+const fs = require("fs");
+const cors = require("cors");
+const P = require("pino");
+const {
+    makeWASocket,
+    useMultiFileAuthState,
+    makeCacheableSignalKeyStore,
+    fetchLatestBaileysVersion,
+    DisconnectReason
+} = require("@whiskeysockets/baileys");
 
 const app = express();
-const port = 3000;
-
-app.use(cors());
 app.use(express.json());
+app.use(cors());
 
-let qrCodeBase64 = null;
-let authenticated = false;
+const clients = {}; // stockage des clients par numéro
 
-// 🔁 Charger session si existe
-let sessionData = null;
-try {
-  sessionData = require('./session.json');
-} catch (e) {
-  console.log("Aucune session existante. QR requis.");
+// 📌 Créer une nouvelle session ou récupérer une existante
+async function getClient(numero) {
+    if (clients[numero]) return clients[numero];
+
+    const authDir = `./sessions/${numero}`;
+    fs.mkdirSync(authDir, { recursive: true });
+    const { state, saveCreds } = await useMultiFileAuthState(authDir);
+
+    const sock = makeWASocket({
+        version: await fetchLatestBaileysVersion(),
+        logger: P({ level: "silent" }),
+        printQRInTerminal: false,
+        auth: {
+            creds: state.creds,
+            keys: makeCacheableSignalKeyStore(state.keys, P().info),
+        },
+        browser: ["BKM BOT", "Chrome", "1.0"]
+    });
+
+    sock.ev.on("creds.update", saveCreds);
+
+    sock.ev.on("connection.update", (update) => {
+        const { connection, lastDisconnect } = update;
+        if (connection === "close") {
+            if (lastDisconnect?.error?.output?.statusCode !== DisconnectReason.loggedOut) {
+                getClient(numero);
+            } else {
+                delete clients[numero];
+            }
+        }
+    });
+
+    clients[numero] = sock;
+    return sock;
 }
 
-// 🚀 Client WhatsApp
-const client = new Client({
-  authStrategy: new LegacySessionAuth({
-    session: sessionData,
-  }),
-  puppeteer: { headless: true, args: ['--no-sandbox'] },
+// 📱 Route 1 : Authentification => Renvoie un pairing code
+app.post("/auth", async (req, res) => {
+    const { numero } = req.body;
+    if (!numero) return res.status(400).json({ error: "Numéro requis" });
+
+    try {
+        const sock = await getClient(numero);
+        const code = await sock.requestPairingCode(numero);
+        res.json({ code });
+    } catch (err) {
+        console.error(err);
+        res.status(500).json({ error: "Échec d'authentification" });
+    }
 });
 
-// 📲 QR Code à scanner
-client.on('qr', async (qr) => {
-  console.log('📲 QR généré. Scannez pour vous connecter.');
-  qrCodeBase64 = await QRCode.toDataURL(qr);
-  authenticated = false;
+// ✅ Route 2 : Vérifie si le client est connecté
+app.post("/checkAuth", async (req, res) => {
+    const { numero } = req.body;
+    if (!numero) return res.status(400).json({ error: "Numéro requis" });
+
+    try {
+        const sock = clients[numero];
+        if (sock && sock.user) {
+            res.json({ connected: true, user: sock.user });
+        } else {
+            res.json({ connected: false });
+        }
+    } catch (err) {
+        res.status(500).json({ error: "Erreur de vérification" });
+    }
 });
 
-// ✅ Auth réussie
-client.on('authenticated', (session) => {
-  console.log('✅ Authentifié. Session sauvegardée dans session.json');
-  fs.writeFileSync('./session.json', JSON.stringify(session));
-  qrCodeBase64 = null;
-  authenticated = true;
+// ✉️ Route 3 : Envoi de message
+app.post("/sendMessage", async (req, res) => {
+    const { from, to, message } = req.body;
+    if (!from || !to || !message) {
+        return res.status(400).json({ error: "Champs requis : from, to, message" });
+    }
+
+    try {
+        const sock = await getClient(from);
+        await sock.sendMessage(to + "@s.whatsapp.net", { text: message });
+        res.json({ status: "message envoyé" });
+    } catch (err) {
+        console.error(err);
+        res.status(500).json({ error: "Erreur lors de l'envoi du message" });
+    }
 });
 
-// 🤖 Client prêt
-client.on('ready', () => {
-  console.log('🤖 Client WhatsApp prêt');
-  authenticated = true;
-  qrCodeBase64 = null;
-});
-
-// ❌ Auth échec
-client.on('auth_failure', (msg) => {
-  console.error('❌ Échec d’authentification :', msg);
-  authenticated = false;
-});
-
-// 🔄 Initialiser client
-client.initialize();
-
-// === ROUTES ===
-
-// 🔐 Route QR
-app.get('/auth', (req, res) => {
-  if (authenticated) {
-    res.json({ status: 'authenticated' });
-  } else if (qrCodeBase64) {
-    res.json({ status: 'scan me', qr: qrCodeBase64 });
-  } else {
-    res.json({ status: 'waiting for qr...' });
-  }
-});
-
-// 🔎 Vérifier auth
-app.get('/checkAuth', (req, res) => {
-  res.json({ status: authenticated ? 'authenticated' : 'not authenticated' });
-});
-
-// ✉️ Envoi de message
-app.post('/sendMessage', async (req, res) => {
-  const { number, message } = req.body;
-
-  if (!authenticated) {
-    return res.status(401).json({ error: 'Client non authentifié' });
-  }
-
-  if (!number || !message) {
-    return res.status(400).json({ error: 'Numéro et message requis' });
-  }
-
-  const formatted = number.replace('+', '') + '@c.us';
-
-  try {
-    await client.sendMessage(formatted, message);
-    res.json({ success: true });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-// 📥 Télécharger la session
-app.get('/download-session', (req, res) => {
-  const file = path.join(__dirname, 'session.json');
-  if (fs.existsSync(file)) {
-    res.download(file, 'session.json');
-  } else {
-    res.status(404).json({ error: 'Session non disponible' });
-  }
-});
-
-app.listen(port, () => {
-  console.log(`🚀 Serveur lancé sur http://localhost:${port}`);
+app.listen(3000, () => {
+    console.log("✅ Serveur WhatsApp Baileys actif sur http://localhost:3000");
 });
