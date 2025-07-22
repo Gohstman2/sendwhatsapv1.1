@@ -1,15 +1,25 @@
 {
-  "name": "whatsapp-auth-export",
+  "name": "baileys-whatsapp-server",
   "version": "1.0.0",
-  "description": "Serveur WhatsApp avec export de session.json",
-  "main": "index.js",
+  "description": "Serveur Node.js pour gérer des sessions WhatsApp avec Baileys",
+  "main": "server.js",
   "scripts": {
-    "start": "node index.js"
+    "start": "node server.js"
   },
+  "keywords": [
+    "whatsapp",
+    "baileys",
+    "bot",
+    "express",
+    "pairing",
+    "api"
+  ],
+  "author": "BKM Service",
+  "license": "MIT",
   "dependencies": {
+    "@whiskeysockets/baileys": "^6.7.1",
+    "cors": "^2.8.5",
     "express": "^4.18.2",
-    "whatsapp-web.js": "^1.22.1",
-    "qrcode": "^1.5.1",
-    "cors": "^2.8.5"
+    "pino": "^8.17.0"
   }
 }
