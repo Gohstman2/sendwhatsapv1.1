@@ -1,108 +1,120 @@
-const express = require("express");
-const fs = require("fs");
-const cors = require("cors");
-const P = require("pino");
-const {
-    makeWASocket,
-    useMultiFileAuthState,
-    makeCacheableSignalKeyStore,
-    fetchLatestBaileysVersion,
-    DisconnectReason
-} = require("@whiskeysockets/baileys");
+const express = require('express');
+const { Client } = require('whatsapp-web.js');
+const QRCode = require('qrcode');
+const cors = require('cors');
+const fetch = require('node-fetch');
 
 const app = express();
-app.use(express.json());
+const port = 3000;
+
 app.use(cors());
+app.use(express.json());
 
-const clients = {}; // stockage des clients par numéro
+let qrCodeBase64 = null;
+let authenticated = false;
+let client;
 
-// 📌 Créer une nouvelle session ou récupérer une existante
-async function getClient(numero) {
-    if (clients[numero]) return clients[numero];
+// 🌍 Ton serveur Python distant
+const REMOTE_SESSION_URL = 'https://sendfiles.pythonanywhere.com/api';
 
-    const authDir = `./sessions/${numero}`;
-    fs.mkdirSync(authDir, { recursive: true });
-    const { state, saveCreds } = await useMultiFileAuthState(authDir);
-
-    const sock = makeWASocket({
-        version: await fetchLatestBaileysVersion(),
-        logger: P({ level: "silent" }),
-        printQRInTerminal: false,
-        auth: {
-            creds: state.creds,
-            keys: makeCacheableSignalKeyStore(state.keys, P().info),
-        },
-        browser: ["BKM BOT", "Chrome", "1.0"]
-    });
-
-    sock.ev.on("creds.update", saveCreds);
-
-    sock.ev.on("connection.update", (update) => {
-        const { connection, lastDisconnect } = update;
-        if (connection === "close") {
-            if (lastDisconnect?.error?.output?.statusCode !== DisconnectReason.loggedOut) {
-                getClient(numero);
-            } else {
-                delete clients[numero];
-            }
-        }
-    });
-
-    clients[numero] = sock;
-    return sock;
+// 📥 Récupérer session distante
+async function fetchSessionFromRemote() {
+  try {
+    const res = await fetch(`${REMOTE_SESSION_URL}/getSession`);
+    if (!res.ok) throw new Error('Session non trouvée');
+    const session = await res.json();
+    return session;
+  } catch (error) {
+    console.warn('⚠️ Aucune session trouvée sur le serveur distant');
+    return null;
+  }
 }
 
-// 📱 Route 1 : Authentification => Renvoie un pairing code
-app.post("/auth", async (req, res) => {
-    const { numero } = req.body;
-    if (!numero) return res.status(400).json({ error: "Numéro requis" });
+// 🚀 Démarrer le client WhatsApp
+async function initClient() {
+  const session = await fetchSessionFromRemote();
+
+  client = new Client({
+    session,
+    puppeteer: { headless: true, args: ['--no-sandbox'] },
+  });
+
+  client.on('qr', async (qr) => {
+    console.log('📲 QR généré');
+    qrCodeBase64 = await QRCode.toDataURL(qr);
+    authenticated = false;
+  });
+
+  client.on('authenticated', async (session) => {
+    console.log('✅ Authentifié');
+    authenticated = true;
+    qrCodeBase64 = null;
 
     try {
-        const sock = await getClient(numero);
-        const code = await sock.requestPairingCode(numero);
-        res.json({ code });
+      await fetch(`${REMOTE_SESSION_URL}/saveSession`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(session),
+      });
+      console.log('☁️ Session sauvegardée sur le serveur distant');
     } catch (err) {
-        console.error(err);
-        res.status(500).json({ error: "Échec d'authentification" });
+      console.error('❌ Erreur lors de la sauvegarde distante', err.message);
     }
+  });
+
+  client.on('auth_failure', (msg) => {
+    console.error('❌ Authentification échouée :', msg);
+    authenticated = false;
+  });
+
+  client.on('ready', () => {
+    console.log('🤖 Client prêt');
+    authenticated = true;
+    qrCodeBase64 = null;
+  });
+
+  client.initialize();
+}
+
+initClient();
+
+// === ROUTES ===
+
+app.get('/auth', (req, res) => {
+  if (authenticated) {
+    return res.json({ status: 'authenticated' });
+  } else if (qrCodeBase64) {
+    return res.json({ status: 'scan me', qr: qrCodeBase64 });
+  } else {
+    return res.json({ status: 'waiting for qr...' });
+  }
 });
 
-// ✅ Route 2 : Vérifie si le client est connecté
-app.post("/checkAuth", async (req, res) => {
-    const { numero } = req.body;
-    if (!numero) return res.status(400).json({ error: "Numéro requis" });
-
-    try {
-        const sock = clients[numero];
-        if (sock && sock.user) {
-            res.json({ connected: true, user: sock.user });
-        } else {
-            res.json({ connected: false });
-        }
-    } catch (err) {
-        res.status(500).json({ error: "Erreur de vérification" });
-    }
+app.get('/checkAuth', (req, res) => {
+  res.json({ status: authenticated ? 'authenticated' : 'not authenticated' });
 });
 
-// ✉️ Route 3 : Envoi de message
-app.post("/sendMessage", async (req, res) => {
-    const { from, to, message } = req.body;
-    if (!from || !to || !message) {
-        return res.status(400).json({ error: "Champs requis : from, to, message" });
-    }
+app.post('/sendMessage', async (req, res) => {
+  const { number, message } = req.body;
 
-    try {
-        const sock = await getClient(from);
-        await sock.sendMessage(to + "@s.whatsapp.net", { text: message });
-        res.json({ status: "message envoyé" });
-    } catch (err) {
-        console.error(err);
-        res.status(500).json({ error: "Erreur lors de l'envoi du message" });
-    }
+  if (!authenticated) {
+    return res.status(401).json({ error: 'Client non authentifié' });
+  }
+
+  if (!number || !message) {
+    return res.status(400).json({ error: 'Numéro et message requis' });
+  }
+
+  const formatted = number.replace('+', '') + '@c.us';
+
+  try {
+    await client.sendMessage(formatted, message);
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
 });
 
-const PORT = process.env.PORT || 3000;
-
-app.listen(PORT, () => {
-    console.log(`✅ Serveur WhatsApp Baileys actif sur http://localhost:${PORT}`);
+app.listen(port, () => {
+  console.log(`🚀 Serveur WhatsApp en ligne sur http://localhost:${port}`);
 });
