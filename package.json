@@ -1,25 +1,18 @@
 {
-  "name": "baileys-whatsapp-server",
+  "name": "whatsapp-remote-session",
   "version": "1.0.0",
-  "description": "Serveur Node.js pour gérer des sessions WhatsApp avec Baileys",
+  "description": "Serveur WhatsApp Web avec gestion de session distante via serveur Python",
   "main": "server.js",
   "scripts": {
     "start": "node server.js"
   },
-  "keywords": [
-    "whatsapp",
-    "baileys",
-    "bot",
-    "express",
-    "pairing",
-    "api"
-  ],
-  "author": "BKM Service",
+  "author": "TonNomIci",
   "license": "MIT",
   "dependencies": {
-    "@whiskeysockets/baileys": "^6.7.1",
     "cors": "^2.8.5",
     "express": "^4.18.2",
-    "pino": "^8.17.0"
+    "node-fetch": "^2.6.11",
+    "qrcode": "^1.5.3",
+    "whatsapp-web.js": "^1.23.0"
   }
 }
